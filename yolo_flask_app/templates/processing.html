@@ -2,19 +2,121 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Processing Video</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            margin-top: 20px; 
+            background-color: #f0f0f0;
+        }
+        #video-container { 
+            position: relative; 
+            display: inline-block; 
+            border: 2px solid #333;
+            max-width: 90%;
+        }
+        #video-stream { 
+            cursor: pointer; 
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        #video-stream.locked { 
+            cursor: not-allowed; 
+        }
+        button { 
+            margin: 10px; 
+            padding: 10px 20px; 
+            font-size: 16px; 
+            cursor: pointer; 
+        }
+        #status { 
+            margin-top: 15px; 
+            font-style: italic; 
+            color: #555; 
+        }
+        a {
+            color: #3498db;
+            text-decoration: none;
+        }
+    </style>
 </head>
 <body>
     <h1>Object Detection in Progress</h1>
-    <p>Click on an object to isolate it. Click the "Reset View" button to see all objects again.</p>
-    <img id="video-stream" src="{{ url_for('video_feed') }}" 
-     data-video-width="{{ video_width }}" 
-     data-video-height="{{ video_height }}">
-    <br>
-    <button id="reset-button">Reset View</button>
-    <br>
+    <p id="instructions">Click on an object to track it. Click the "Reset View" button to see all objects again.</p>
+
+    <!-- This container will hold the video stream -->
+    <div id="video-container">
+        <!-- The video stream from the Flask backend -->
+        <img id="video-stream" src="{{ url_for('video_feed') }}" alt="Video Stream">
+    </div>
+
+    <div>
+        <button id="reset-button">Reset View</button>
+    </div>
+    
+    <div id="status">Status: Detecting all objects.</div>
     <a href="{{ url_for('index') }}">Upload another video</a>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        const videoStream = document.getElementById('video-stream');
+        const resetButton = document.getElementById('reset-button');
+        const statusDiv = document.getElementById('status');
+        const instructionsP = document.getElementById('instructions');
+
+        let isObjectSelected = false;
+
+        // Event listener for clicks on the video stream
+        videoStream.addEventListener('click', function(event) {
+            if (isObjectSelected) {
+                console.log("An object is already selected. Please reset to select another.");
+                return;
+            }
+
+            // Get the bounding rectangle of the video stream element
+            const rect = videoStream.getBoundingClientRect();
+            // Calculate the click coordinates relative to the image
+            const scaleX = videoStream.naturalWidth / videoStream.clientWidth;
+            const scaleY = videoStream.naturalHeight / videoStream.clientHeight;
+            const x = (event.clientX - rect.left) * scaleX;
+            const y = (event.clientY - rect.top) * scaleY;
+
+            // Send coordinates to the backend
+            fetch('/select_object', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: x, y: y }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Server response:', data.message);
+                statusDiv.textContent = `Status: ${data.message}`;
+                if (data.success) {
+                    isObjectSelected = true;
+                    videoStream.classList.add('locked');
+                    instructionsP.textContent = 'Press "Reset View" to select a new object.';
+                }
+            })
+            .catch(error => console.error('Error selecting object:', error));
+        });
+
+        // Event listener for the reset button
+        resetButton.addEventListener('click', function() {
+            fetch('/reset_selection', {
+                method: 'POST',
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Server response:', data.message);
+                statusDiv.textContent = `Status: ${data.message}`;
+                isObjectSelected = false;
+                videoStream.classList.remove('locked');
+                instructionsP.textContent = 'Click on any detected object to track it.';
+            })
+            .catch(error => console.error('Error resetting selection:', error));
+        });
+    </script>
 </body>
 </html>

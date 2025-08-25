@@ -1,85 +1,100 @@
 import os
+import cv2
 from flask import Flask, render_template, request, redirect, url_for, session, Response, jsonify
 from werkzeug.utils import secure_filename
 from ultralytics import YOLO
-import cv2
 
+# --- Application Setup ---
 app = Flask(__name__)
-app.secret_key = 'your_very_secret_key'  # Replace with a real secret key
+app.secret_key = 'a-very-secret-and-secure-key' 
 
-# Define the upload folder and ensure it exists
+# --- Configuration ---
 UPLOAD_FOLDER = 'static/uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Load the YOLOv8 model
+# --- Model Loading ---
 model = YOLO('yolov8n.pt')
 
-# Global variables for tracking state
-SELECTED_TRACK_ID=None
+# --- Global State Management ---
+SELECTED_TRACK_ID = None
+LATEST_RESULTS = None
 
-# This will store the latest results from the model for click detection
-LATEST_RESULTS=None
-
-# In-memory store for bounding box and selection data
-detection_data = {}
-
-def is_point_in_box(point, box):
-    """Check if a point (x, y) is inside a bounding box [x1, y1, x2, y2]."""
-    x, y = point
-    x1, y1, x2, y2 = box
-    return x1 < x < x2 and y1 < y < y2
-
-def generate_frames():
-    """Generates video frames with object detection and tracking."""
+# --- Core Video Processing Function ---
+def generate_frames(video_path):
+    """
+    Generator function to process an uploaded video file frame by frame.
+    It performs object tracking and yields frames for streaming.
+    Includes debugging print statements.
+    """
     global SELECTED_TRACK_ID, LATEST_RESULTS
+
+    print(f"--- Attempting to open video: {video_path} ---")
+    cap = cv2.VideoCapture(video_path)
     
-    # Use 0 for webcam or provide a path to a video file
-    cap = cv2.VideoCapture(0) 
+    if not cap.isOpened():
+        print(f"!!! CRITICAL ERROR: Could not open video file at {video_path} !!!")
+        return
 
-    while cap.isOpened():
-        success, frame = cap.read()
-        if not success:
-            break
+    print("--- Video opened successfully. Starting frame processing loop. ---")
+    frame_count = 0
+    try:
+        while cap.isOpened():
+            success, frame = cap.read()
+            if not success:
+                print("--- End of video or failed to read frame. Exiting loop. ---")
+                break
 
-        # Run YOLOv8 tracking on the frame, persisting tracks between frames
-        results = model.track(frame, persist=True)
-        
-        # Store the latest results globally so the click handler can access them
-        LATEST_RESULTS = results
+            frame_count += 1
+            print(f"Processing frame #{frame_count}")
 
-        # By default, plot all detections
-        annotated_frame = results.plot()
-
-        # If a specific object is being tracked, modify the frame
-        if SELECTED_TRACK_ID is not None:
-            # Create a clean copy of the frame to draw on
-            annotated_frame = frame.copy()
+            # Run YOLOv8 tracking on the frame
+            results = model.track(frame, persist=True)
             
-            if results.boxes.id is not None:
-                boxes = results.boxes.xyxy.cpu().numpy().astype(int)
-                ids = results.boxes.id.cpu().numpy().astype(int)
+            # Store the latest results for the click handler
+            if results and len(results) > 0:
+                LATEST_RESULTS = results[0]
+                annotated_frame = LATEST_RESULTS.plot()
+            else:
+                # If no results, use the original frame
+                annotated_frame = frame
 
-                for box, track_id in zip(boxes, ids):
-                    # If the current object is the one we are tracking
+            # If a specific object is being tracked, customize the annotation
+            if SELECTED_TRACK_ID is not None and LATEST_RESULTS and LATEST_RESULTS.boxes.id is not None:
+                annotated_frame = frame.copy()
+                boxes = LATEST_RESULTS.boxes.xyxy.cpu().numpy().astype(int)
+                track_ids = LATEST_RESULTS.boxes.id.cpu().numpy().astype(int)
+
+                for box, track_id in zip(boxes, track_ids):
                     if track_id == SELECTED_TRACK_ID:
-                        (x1, y1, x2, y2) = box
-                        # Draw a more prominent bounding box for the tracked object
-                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 3) # Red, thicker box
+                        x1, y1, x2, y2 = box
+                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
                         cv2.putText(annotated_frame, f"TRACKING ID: {track_id}", (x1, y1 - 10),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-                        break # No need to check other boxes
+                        break
 
-        # Encode the frame in JPEG format
-        (flag, encodedImage) = cv2.imencode(".jpg", annotated_frame)
-        if not flag:
-            continue
+            # Encode the frame to JPEG
+            ret, buffer = cv2.imencode('.jpg', annotated_frame)
+            if not ret:
+                print(f"Warning: Failed to encode frame #{frame_count}")
+                continue
 
-        # Yield the output frame in the byte format
-        yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
-              bytearray(encodedImage) + b'\r\n')
+            # Yield the frame for streaming
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
-    cap.release()
+    except Exception as e:
+        print(f"!!! An exception occurred during frame generation: {e} !!!")
+    finally:
+        # Ensure the video capture is released
+        print("--- Releasing video capture object. ---")
+        cap.release()
+        SELECTED_TRACK_ID = None
+        LATEST_RESULTS = None
+
+
+# --- Flask Routes ---
 
 @app.route('/')
 def index():
@@ -91,14 +106,15 @@ def upload_video():
         return redirect(request.url)
     
     file = request.files['video']
-    if file and file.filename:
+    if file.filename == '':
+        return redirect(request.url)
+
+    if file:
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
-        # --- FIX 4: Correct the redirect flow ---
         session['video_path'] = filepath
         return redirect(url_for('processing'))
-
     return redirect(request.url)
 
 @app.route('/processing')
@@ -107,42 +123,33 @@ def processing():
     if not video_path or not os.path.exists(video_path):
         return "Error: Video not found. Please upload again.", 404
     
-    cap = cv2.VideoCapture(video_path)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    
-    return render_template('processing.html', video_width=width, video_height=height)
+    return render_template('processing.html')
 
 @app.route('/video_feed')
 def video_feed():
-    """Video streaming route."""
-    return Response(generate_frames(),
+    video_path = session.get('video_path', None)
+    if not video_path:
+        return "Error: No video path in session. Please upload a video.", 400
+        
+    return Response(generate_frames(video_path),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
-
 
 @app.route('/select_object', methods=['POST'])
 def select_object():
-    """
-    Receives click coordinates. If no object is currently tracked,
-    it finds the object at the coordinates and locks onto it.
-    """
     global SELECTED_TRACK_ID, LATEST_RESULTS
     
-    # This is the key change: only allow selection if no object is currently tracked.
     if SELECTED_TRACK_ID is not None:
-        return jsonify(success=False, message="An object is already being tracked. Please reset first.")
+        return jsonify(success=False, message="An object is already tracked. Please reset first.")
 
     data = request.get_json()
-    x, y = data['x'], data['y']
+    x, y = int(data['x']), int(data['y'])
 
-    if LATEST_RESULTS is not None and LATEST_RESULTS.boxes.id is not None:
+    if LATEST_RESULTS and LATEST_RESULTS.boxes.id is not None:
         boxes = LATEST_RESULTS.boxes.xyxy.cpu().numpy().astype(int)
         ids = LATEST_RESULTS.boxes.id.cpu().numpy().astype(int)
 
         for box, track_id in zip(boxes, ids):
             x1, y1, x2, y2 = box
-            # Check if the click coordinates are inside the bounding box
             if x1 < x < x2 and y1 < y < y2:
                 SELECTED_TRACK_ID = track_id
                 return jsonify(success=True, message=f"Locked onto object with ID: {track_id}")
@@ -151,7 +158,10 @@ def select_object():
 
 @app.route('/reset_selection', methods=['POST'])
 def reset_selection():
-    """Resets the selected track ID, allowing for a new selection."""
     global SELECTED_TRACK_ID
     SELECTED_TRACK_ID = None
-    return jsonify(success=True, message="Selection reset. Ready to track a new object.")
+    return jsonify(success=True, message="Selection reset. Detecting all objects.")
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    app.run(debug=True)
