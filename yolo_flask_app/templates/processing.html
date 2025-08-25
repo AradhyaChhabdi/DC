@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Processing Video</title>
+</head>
+<body>
+    <h1>Object Detection in Progress</h1>
+    <p>Click on an object to isolate it. Click the "Reset View" button to see all objects again.</p>
+    <img id="video-stream" src="{{ url_for('video_feed') }}" 
+     data-video-width="{{ video_width }}" 
+     data-video-height="{{ video_height }}">
+    <br>
+    <button id="reset-button">Reset View</button>
+    <br>
+    <a href="{{ url_for('index') }}">Upload another video</a>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

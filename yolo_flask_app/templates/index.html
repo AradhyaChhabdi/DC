@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLOv8 Object Tracking</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 20px; }
+        #video-container { position: relative; display: inline-block; }
+        #video-stream { border: 2px solid #333; cursor: pointer; }
+        #video-stream.locked { cursor: not-allowed; } /* Change cursor when locked */
+        button { margin-top: 10px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
+        #status { margin-top: 15px; font-style: italic; color: #555; }
+    </style>
+</head>
+<body>
+    <h1>YOLOv8 Live Object Tracking</h1>
+    <p id="instructions">Click on any detected object to track it exclusively.</p>
+    <div id="video-container">
+        <img src="{{ url_for('video_feed') }}" width="640" height="480" id="video-stream">
+    </div>
+    <div>
+        <button id="reset-button">Reset View</button>
+    </div>
+    <div id="status">Status: Detecting all objects.</div>
+
+    <script>
+        const videoStream = document.getElementById('video-stream');
+        const resetButton = document.getElementById('reset-button');
+        const statusDiv = document.getElementById('status');
+        const instructionsP = document.getElementById('instructions');
+
+        // This variable will control the state of our application
+        let isObjectSelected = false;
+
+        // Event listener for clicks on the video stream
+        videoStream.addEventListener('click', function(event) {
+            // If an object is already selected, do nothing.
+            if (isObjectSelected) {
+                console.log("An object is already selected. Please reset to select another.");
+                return;
+            }
+
+            const rect = videoStream.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            // Send coordinates to the backend to attempt selection
+            fetch('/select_object', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: x, y: y }),
+            })
+          .then(response => response.json())
+          .then(data => {
+                console.log('Server response:', data.message);
+                statusDiv.textContent = `Status: ${data.message}`;
+                // If the backend successfully selected an object, update our state
+                if (data.success) {
+                    isObjectSelected = true;
+                    videoStream.classList.add('locked');
+                    instructionsP.textContent = 'Press "Reset View" to select a new object.';
+                }
+            })
+          .catch(error => console.error('Error:', error));
+        });
+
+        // Event listener for the reset button
+        resetButton.addEventListener('click', function() {
+            fetch('/reset_selection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            })
+          .then(response => response.json())
+          .then(data => {
+                console.log('Server response:', data.message);
+                statusDiv.textContent = `Status: ${data.message}`;
+                // Reset the state to allow for new selections
+                isObjectSelected = false;
+                videoStream.classList.remove('locked');
+                instructionsP.textContent = 'Click on any detected object to track it exclusively.';
+            })
+          .catch(error => console.error('Error:', error));
+        });
+    </script>
+</body>
+</html>
