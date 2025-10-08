@@ -2,70 +2,80 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 Video Upload</title>
+    <title>YOLOv8 Live Object Tracking with AirSim</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            text-align: center; 
-            margin-top: 50px; 
-            background-color: #f0f0f0;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            height: 100vh;
+        body { font-family: sans-serif; text-align: center; margin-top: 2rem; background-color: #f4f4f4; }
+        h1 { color: #333; }
+        #video-container { 
+            position: relative; 
+            display: inline-block; 
+            border: 2px solid #333;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
         }
-        .container {
-            background-color: #ffffff;
-            padding: 30px 40px;
-            border-radius: 8px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            width: 90%;
-            max-width: 500px;
-        }
-        h1 {
-            color: #333;
-        }
-        p {
-            color: #555;
-            margin-bottom: 25px;
-        }
-        /* Style for the file input */
-        input[type="file"] {
-            display: block;
-            margin: 20px auto;
-            border: 1px solid #ccc;
-            padding: 10px;
-            border-radius: 5px;
-            width: 95%;
-        }
-        /* Style for the submit button */
+        #video-feed { display: block; }
         button { 
-            margin-top: 10px; 
-            padding: 12px 25px; 
+            margin-top: 1rem; 
+            padding: 10px 20px; 
             font-size: 16px; 
             cursor: pointer; 
-            background-color: #007bff;
-            color: white;
             border: none;
+            background-color: #5cb85c;
+            color: white;
             border-radius: 5px;
-            transition: background-color 0.3s;
         }
-        button:hover {
-            background-color: #0056b3;
-        }
+        button:hover { background-color: #4cae4c; }
+        #status { margin-top: 1rem; font-style: italic; color: #555; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Interactive Object Tracking</h1>
-        <p>Upload a video file to begin detecting and tracking objects.</p>
+    <h1>YOLOv8 Live Object Tracking with AirSim</h1>
+    <p>Click on any detected object to track it exclusively.</p>
 
-        <!-- A simpler form for video upload -->
-        <form action="{{ url_for('upload_video') }}" method="post" enctype="multipart/form-data">
-            <input type="file" name="video" accept="video/*" required>
-            <button type="submit">Upload and Process</button>
-        </form>
+    <div id="video-container">
+        <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Live Video Feed">
     </div>
+    
+    <div>
+        <button id="reset-button">Reset View</button>
+    </div>
+    <div id="status">Status: Ready to track.</div>
+
+    <script>
+        const videoFeed = document.getElementById('video-feed');
+        const statusDiv = document.getElementById('status');
+        const resetButton = document.getElementById('reset-button');
+
+        // Event listener for clicks on the video feed
+        videoFeed.addEventListener('click', function(event) {
+            const rect = videoFeed.getBoundingClientRect();
+            // Get the click coordinates relative to the image
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            console.log(`Clicked at: (${x}, ${y})`);
+            
+            // Send the coordinates to the Flask backend
+            fetch('/select_object', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: x, y: y })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(data);
+                statusDiv.textContent = `Status: ${data.message}`;
+            });
+        });
+
+        // Event listener for the reset button
+        resetButton.addEventListener('click', function() {
+            fetch('/reset_selection', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                console.log(data);
+                statusDiv.textContent = `Status: ${data.message}`;
+            });
+        });
+    </script>
 </body>
 </html>
