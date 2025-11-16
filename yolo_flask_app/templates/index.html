@@ -4,67 +4,421 @@
     <meta charset="UTF-8">
     <title>YOLOv8 Live Object Tracking with AirSim</title>
     <style>
-        body { font-family: sans-serif; text-align: center; margin-top: 2rem; background-color: #f4f4f4; }
-        h1 { color: #333; }
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4; 
+        }
+        h1 { 
+            color: #333; 
+            margin: 10px 0;
+            font-size: 24px;
+        }
         #video-container { 
             position: relative; 
             display: inline-block; 
             border: 2px solid #333;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            max-width: 90vw;
+            max-height: 85vh;
         }
-        #video-feed { display: block; }
+        #video-feed { 
+            display: block; 
+            cursor: crosshair;
+            max-width: 90vw;
+            max-height: 85vh;
+            width: auto;
+            height: auto;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+        }
+        /* Overlay canvas sits above the video and ignores mouse events */
+        #overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 2;
+        }
+        
+        .control-panel {
+            margin-top: 5px;
+            display: inline-block;
+        }
+        
         button { 
-            margin-top: 1rem; 
-            padding: 10px 20px; 
-            font-size: 16px; 
+            margin: 3px; 
+            padding: 5px 12px; 
+            font-size: 12px; 
             cursor: pointer; 
             border: none;
             background-color: #5cb85c;
             color: white;
-            border-radius: 5px;
+            border-radius: 3px;
+            transition: all 0.3s;
         }
         button:hover { background-color: #4cae4c; }
-        #status { margin-top: 1rem; font-style: italic; color: #555; }
+        button:active { transform: scale(0.95); }
+        
+        #reset-button { background-color: #d9534f; }
+        #reset-button:hover { background-color: #c9302c; }
+        
+        #status { 
+            margin-top: 5px; 
+            font-style: italic; 
+            color: #555;
+            font-size: 12px;
+            padding: 5px 10px;
+            border-radius: 3px;
+            transition: all 0.3s;
+        }
+        
+        #mode-display {
+            margin-top: 5px;
+            padding: 5px 12px;
+            font-size: 12px;
+            font-weight: bold;
+            border-radius: 3px;
+            display: inline-block;
+        }
+        
+        .mode-manual {
+            background-color: #5cb85c;
+            color: white;
+        }
+        
+        .mode-auto {
+            background-color: #f0ad4e;
+            color: white;
+        }
     </style>
 </head>
 <body>
-    <h1>YOLOv8 Live Object Tracking with AirSim</h1>
-    <p>Click on any detected object to track it exclusively.</p>
+    <h1>🚗 YOLOv8 Autonomous Navigation with AirSim</h1>
+    
+    <div id="mode-display" class="mode-manual">MODE: MANUAL</div>
 
     <div id="video-container">
         <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Live Video Feed">
     </div>
     
-    <div>
-        <button id="reset-button">Reset View</button>
+    <div class="control-panel">
+        <button id="reset-button">🔄 Reset</button>
+        <button id="toggle-sim-control">🎮 Enable Simulation Control</button>
     </div>
-    <div id="status">Status: Ready to track.</div>
+    
+    <div id="status">Ready</div>
 
     <script>
         const videoFeed = document.getElementById('video-feed');
         const statusDiv = document.getElementById('status');
         const resetButton = document.getElementById('reset-button');
+        const toggleSimControl = document.getElementById('toggle-sim-control');
+        const modeDisplay = document.getElementById('mode-display');
+        
+        // Create overlay canvas dynamically and append above the video
+        const overlayCanvas = document.createElement('canvas');
+        overlayCanvas.id = 'overlay-canvas';
+        videoFeed.parentElement.appendChild(overlayCanvas);
+        const octx = overlayCanvas.getContext('2d');
+        
+        let currentMode = 'MANUAL';
+        let keysPressed = {};
+        let controlSource = 'browser'; // 'browser' or 'simulation'
+        let actualFrameWidth = 640;
+        let actualFrameHeight = 480;
+        let mouseX = null, mouseY = null;
+        
+        function updateStatus(message, isError=false) {
+            statusDiv.textContent = `Status: ${message}`;
+            statusDiv.style.color = isError ? 'red' : '#555';
+        }
+        
+        // Get actual frame dimensions from server
+        fetch('/get_frame_size')
+        .then(response => response.json())
+        .then(data => {
+            actualFrameWidth = data.width;
+            actualFrameHeight = data.height;
+            console.log(`Frame size: ${actualFrameWidth}x${actualFrameHeight}`);
+        });
 
-        // Event listener for clicks on the video feed
-        videoFeed.addEventListener('click', function(event) {
+        // Update mode display periodically
+        function updateMode() {
+            fetch('/get_mode')
+            .then(response => response.json())
+            .then(data => {
+                currentMode = data.mode;
+                modeDisplay.textContent = `MODE: ${currentMode}`;
+                modeDisplay.className = currentMode === 'MANUAL' ? 'mode-manual' : 'mode-auto';
+                
+                if (data.collision_detected) {
+                    statusDiv.textContent = 'Status: 💥 COLLISION DETECTED! Click Reset to continue.';
+                    statusDiv.style.color = 'red';
+                    statusDiv.style.fontWeight = 'bold';
+                    statusDiv.style.fontSize = '14px';
+                } else if (currentMode === 'AUTO') {
+                    if (data.auto_arming) {
+                        statusDiv.textContent = `Status: ⏳ Arming collision detection... ${data.arm_secs_remaining}s`;
+                    } else {
+                        statusDiv.textContent = 'Status: 🎯 AUTO MODE - Tracking and pursuing target...';
+                    }
+                    statusDiv.style.color = 'orange';
+                    statusDiv.style.fontWeight = 'bold';
+                    statusDiv.style.fontSize = '14px';
+                } else if (currentMode === 'MANUAL' && !statusDiv.textContent.includes('TRACKING')) {
+                    statusDiv.textContent = 'Status: ⌨️ MANUAL - Use arrow keys to drive';
+                    statusDiv.style.color = '#555';
+                    statusDiv.style.fontWeight = 'normal';
+                    statusDiv.style.fontSize = '12px';
+                }
+            });
+        }
+        
+        setInterval(updateMode, 500);
+
+        // Keep overlay canvas sized to the displayed video element
+        function syncOverlaySize() {
             const rect = videoFeed.getBoundingClientRect();
-            // Get the click coordinates relative to the image
-            const x = event.clientX - rect.left;
-            const y = event.clientY - rect.top;
-
-            console.log(`Clicked at: (${x}, ${y})`);
+            overlayCanvas.width = Math.max(1, Math.floor(rect.width));
+            overlayCanvas.height = Math.max(1, Math.floor(rect.height));
+            overlayCanvas.style.width = rect.width + 'px';
+            overlayCanvas.style.height = rect.height + 'px';
+        }
+        
+        // Draw detection boxes and optional hover crosshair
+        function drawOverlay() {
+            syncOverlaySize();
+            const rect = videoFeed.getBoundingClientRect();
+            const dispW = rect.width, dispH = rect.height;
+            octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
             
-            // Send the coordinates to the Flask backend
-            fetch('/select_object', {
+            fetch('/get_current_detections')
+              .then(r => r.json())
+              .then(({ detections }) => {
+                  if (!detections) return;
+                  const scaleX = dispW / actualFrameWidth;
+                  const scaleY = dispH / actualFrameHeight;
+                  const marginPx = Math.max(8, Math.floor(0.06 * Math.min(dispW, dispH)));
+                  
+                  detections.forEach(det => {
+                      const [x1, y1, x2, y2] = det.box;
+                      const dx1 = x1 * scaleX, dy1 = y1 * scaleY;
+                      const dx2 = x2 * scaleX, dy2 = y2 * scaleY;
+                      const w = dx2 - dx1, h = dy2 - dy1;
+                      
+                      // Expanded region (shows click tolerance)
+                      const ex1 = Math.max(0, dx1 - marginPx);
+                      const ey1 = Math.max(0, dy1 - marginPx);
+                      const ex2 = Math.min(dispW - 1, dx2 + marginPx);
+                      const ey2 = Math.min(dispH - 1, dy2 + marginPx);
+                      
+                      // Draw expanded translucent region
+                      octx.fillStyle = 'rgba(255, 255, 0, 0.15)';
+                      octx.fillRect(ex1, ey1, ex2 - ex1, ey2 - ey1);
+                      
+                      // Draw main box
+                      octx.strokeStyle = 'yellow';
+                      octx.lineWidth = 2;
+                      octx.strokeRect(dx1, dy1, w, h);
+                      
+                      // Label
+                      octx.fillStyle = 'yellow';
+                      octx.font = '14px Arial';
+                      octx.fillText(`ID:${det.id}`, dx1 + 2, Math.max(12, dy1 - 4));
+                  });
+                  
+                  // Crosshair at mouse position (if available)
+                  if (mouseX !== null && mouseY !== null) {
+                      octx.strokeStyle = 'red';
+                      octx.lineWidth = 1;
+                      octx.beginPath();
+                      octx.moveTo(mouseX - 10, mouseY);
+                      octx.lineTo(mouseX + 10, mouseY);
+                      octx.moveTo(mouseX, mouseY - 10);
+                      octx.lineTo(mouseX, mouseY + 10);
+                      octx.stroke();
+                  }
+              })
+              .catch(() => {});
+        }
+        
+        // Track mouse for crosshair
+        videoFeed.addEventListener('mousemove', (e) => {
+            const rect = videoFeed.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+        videoFeed.addEventListener('mouseleave', () => { mouseX = mouseY = null; });
+        window.addEventListener('resize', syncOverlaySize);
+        
+        // Refresh overlay frequently
+        syncOverlaySize();
+        setInterval(drawOverlay, 250);
+
+        // Manual control function
+        function sendManualControl(action) {
+            if (currentMode !== 'MANUAL') {
+                return;
+            }
+            
+            fetch('/manual_control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ x: x, y: y })
+                body: JSON.stringify({ action: action })
             })
             .then(response => response.json())
             .then(data => {
-                console.log(data);
-                statusDiv.textContent = `Status: ${data.message}`;
+                if (data.success && currentMode === 'MANUAL') {
+                    statusDiv.textContent = `Status: ${data.message}`;
+                }
             });
+        }
+
+        // Keyboard event listeners
+        document.addEventListener('keydown', function(event) {
+            if (keysPressed[event.key]) return; // Prevent key repeat
+            keysPressed[event.key] = true;
+            
+            switch(event.key) {
+                case 'ArrowUp':
+                case 'w':
+                case 'W':
+                    sendManualControl('forward');
+                    event.preventDefault();
+                    break;
+                case 'ArrowDown':
+                case 's':
+                case 'S':
+                    sendManualControl('backward');
+                    event.preventDefault();
+                    break;
+                case 'ArrowLeft':
+                case 'a':
+                case 'A':
+                    sendManualControl('left');
+                    event.preventDefault();
+                    break;
+                case 'ArrowRight':
+                case 'd':
+                case 'D':
+                    sendManualControl('right');
+                    event.preventDefault();
+                    break;
+                case ' ':
+                    sendManualControl('brake');
+                    event.preventDefault();
+                    break;
+            }
+        });
+        
+        document.addEventListener('keyup', function(event) {
+            delete keysPressed[event.key];
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(event.key)) {
+                sendManualControl('stop');
+            }
+        });
+
+        // Event listener for clicks on the video feed (object selection)
+        videoFeed.addEventListener('click', function(event) {
+            if (currentMode === 'AUTO') {
+                updateStatus('Already in AUTO mode. Click Reset to select a new target.', true);
+                return;
+            }
+
+            const rect = videoFeed.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const clickY = event.clientY - rect.top;
+            const displayWidth = rect.width;
+            const displayHeight = rect.height;
+
+            // First, try to resolve the clicked detection entirely on the client
+            fetch('/get_current_detections')
+              .then(r => r.json())
+              .then(({ detections }) => {
+                  if (!detections || detections.length === 0) {
+                      // Fallback to coordinate-based selection
+                      const scaleX = actualFrameWidth / displayWidth;
+                      const scaleY = actualFrameHeight / displayHeight;
+                      const scaledX = Math.round(clickX * scaleX);
+                      const scaledY = Math.round(clickY * scaleY);
+                      console.log('[Fallback] scaled coords ->', scaledX, scaledY);
+                      return fetch('/select_object', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ x: scaledX, y: scaledY })
+                      }).then(r => r.json());
+                  }
+
+                  // If only one detection, select it directly (most robust)
+                  if (detections.length === 1) {
+                      const onlyId = detections[0].id;
+                      console.log('Single detection present; selecting by track_id:', onlyId);
+                      return fetch('/select_track', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ track_id: onlyId })
+                      }).then(r => r.json());
+                  }
+
+                  // Map boxes from frame space to display space and hit-test
+                  let best = null;
+                  const marginPx = Math.max(10, Math.floor(0.08 * Math.min(displayWidth, displayHeight)));
+                  detections.forEach(det => {
+                      const [x1, y1, x2, y2] = det.box;
+                      const dx1 = x1 * (displayWidth / actualFrameWidth);
+                      const dy1 = y1 * (displayHeight / actualFrameHeight);
+                      const dx2 = x2 * (displayWidth / actualFrameWidth);
+                      const dy2 = y2 * (displayHeight / actualFrameHeight);
+
+                      const ex1 = Math.max(0, dx1 - marginPx);
+                      const ey1 = Math.max(0, dy1 - marginPx);
+                      const ex2 = Math.min(displayWidth - 1, dx2 + marginPx);
+                      const ey2 = Math.min(displayHeight - 1, dy2 + marginPx);
+
+                      const inside = (ex1 <= clickX && clickX <= ex2 && ey1 <= clickY && clickY <= ey2);
+                      const cx = (dx1 + dx2) / 2;
+                      const cy = (dy1 + dy2) / 2;
+                      const dist = Math.hypot(clickX - cx, clickY - cy);
+                      // Prefer inside, but also consider nearest center
+                      const prefer = inside ? 0 : 1; // inside beats outside
+                      if (!best || prefer < best.prefer || (prefer === best.prefer && dist < best.dist)) {
+                          best = { id: det.id, dist };
+                      }
+                  });
+
+                  if (best) {
+                      console.log('Selecting by track_id:', best.id);
+                      return fetch('/select_track', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ track_id: best.id })
+                      }).then(r => r.json());
+                  } else {
+                      // Fallback: send scaled coordinates if no inside hit
+                      const scaleX = actualFrameWidth / displayWidth;
+                      const scaleY = actualFrameHeight / displayHeight;
+                      const scaledX = Math.round(clickX * scaleX);
+                      const scaledY = Math.round(clickY * scaleY);
+                      console.log('[Fallback no-hit] scaled coords ->', scaledX, scaledY);
+                      return fetch('/select_object', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ x: scaledX, y: scaledY })
+                      }).then(r => r.json());
+                  }
+              })
+              .then(data => {
+                  if (!data) return; // Nothing to report
+                  console.log('Selection response:', data);
+                  updateStatus(data.message, !data.success);
+              })
+              .catch(err => {
+                  console.error('Selection error:', err);
+                  updateStatus('Selection failed. See console for details.', true);
+              });
         });
 
         // Event listener for the reset button
@@ -74,7 +428,47 @@
             .then(data => {
                 console.log(data);
                 statusDiv.textContent = `Status: ${data.message}`;
+                statusDiv.style.color = '#555';
             });
+        });
+
+        // Event listener for toggle simulation control button
+        toggleSimControl.addEventListener('click', function() {
+            if (controlSource === 'browser') {
+                // Switch to simulation control
+                fetch('/toggle_control_source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: 'simulation' })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        controlSource = 'simulation';
+                        toggleSimControl.textContent = '⌨️ Enable Browser Control';
+                        toggleSimControl.style.backgroundColor = '#f0ad4e';
+                        statusDiv.textContent = 'Status: Simulation control active. Use AirSim keyboard.';
+                        statusDiv.style.color = 'orange';
+                    }
+                });
+            } else {
+                // Switch to browser control
+                fetch('/toggle_control_source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: 'browser' })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        controlSource = 'browser';
+                        toggleSimControl.textContent = '🎮 Enable Simulation Control';
+                        toggleSimControl.style.backgroundColor = '#5cb85c';
+                        statusDiv.textContent = 'Status: Browser control active. Use arrow keys.';
+                        statusDiv.style.color = '#555';
+                    }
+                });
+            }
         });
     </script>
 </body>
