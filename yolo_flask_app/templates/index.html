@@ -105,7 +105,6 @@
     </div>
     
     <div class="control-panel">
-        <button id="reset-button">🔄 Reset</button>
         <button id="toggle-sim-control">🎮 Enable Simulation Control</button>
     </div>
     
@@ -114,7 +113,6 @@
     <script>
         const videoFeed = document.getElementById('video-feed');
         const statusDiv = document.getElementById('status');
-        const resetButton = document.getElementById('reset-button');
         const toggleSimControl = document.getElementById('toggle-sim-control');
         const modeDisplay = document.getElementById('mode-display');
         
@@ -155,7 +153,7 @@
                 modeDisplay.className = currentMode === 'MANUAL' ? 'mode-manual' : 'mode-auto';
                 
                 if (data.collision_detected) {
-                    statusDiv.textContent = 'Status: 💥 COLLISION DETECTED! Click Reset to continue.';
+                    statusDiv.textContent = 'Status: 💥 COLLISION DETECTED! (AUTO aborted)';
                     statusDiv.style.color = 'red';
                     statusDiv.style.fontWeight = 'bold';
                     statusDiv.style.fontSize = '14px';
@@ -324,7 +322,7 @@
         // Event listener for clicks on the video feed (object selection)
         videoFeed.addEventListener('click', function(event) {
             if (currentMode === 'AUTO') {
-                updateStatus('Already in AUTO mode. Click Reset to select a new target.', true);
+                updateStatus('Already in AUTO mode. Reset disabled.', true);
                 return;
             }
 
@@ -421,16 +419,7 @@
               });
         });
 
-        // Event listener for the reset button
-        resetButton.addEventListener('click', function() {
-            fetch('/reset_selection', { method: 'POST' })
-            .then(response => response.json())
-            .then(data => {
-                console.log(data);
-                statusDiv.textContent = `Status: ${data.message}`;
-                statusDiv.style.color = '#555';
-            });
-        });
+        // Reset button removed per request; backend route retained for potential future use.
 
         // Event listener for toggle simulation control button
         toggleSimControl.addEventListener('click', function() {

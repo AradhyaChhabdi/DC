@@ -27,6 +27,7 @@ AUTO_ARM_SECONDS = 1.5
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 TARGET_LAST_UPDATE = None  # timestamp of last target pixel/depth update
+LAST_MOVING_TS = 0.0       # last time speed was above threshold
 
 # AirSim client (global to share between threads)
 airsim_client = None
@@ -55,6 +56,27 @@ class PIDController:
 # Initialize PID controllers for steering and throttle
 steering_pid = PIDController(kp=0.5, ki=0.0, kd=0.1)
 throttle_pid = PIDController(kp=0.3, ki=0.0, kd=0.05)
+
+def _seed_target_from_results():
+    """Seed TARGET_CENTER_PX immediately after selection using current LATEST_RESULTS.
+    Returns True if seeded successfully."""
+    global LATEST_RESULTS, SELECTED_TRACK_ID, TARGET_CENTER_PX, TARGET_LAST_UPDATE
+    try:
+        if LATEST_RESULTS is None or LATEST_RESULTS.boxes.id is None or SELECTED_TRACK_ID is None:
+            return False
+        boxes = LATEST_RESULTS.boxes.xyxy.cpu().numpy().astype(int)
+        ids = LATEST_RESULTS.boxes.id.cpu().numpy().astype(int)
+        for box, track_id in zip(boxes, ids):
+            if int(track_id) == int(SELECTED_TRACK_ID):
+                x1, y1, x2, y2 = box
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+                TARGET_CENTER_PX = (cx, cy)
+                TARGET_LAST_UPDATE = time.time()
+                return True
+    except Exception:
+        return False
+    return False
 
 def get_3d_position_from_2d(client, pixel_x, pixel_y, depth_value):
     """Convert 2D pixel coordinates to 3D world coordinates using depth."""
@@ -128,6 +150,13 @@ def autonomous_navigation_thread():
                     time.sleep(1)
                     continue
                 
+                # Update moving timestamp
+                try:
+                    if car_state.speed > 0.2:
+                        globals()['LAST_MOVING_TS'] = time.time()
+                except Exception:
+                    pass
+
                 # Prefer image-based visual servoing for robustness
                 dt = 0.1  # 10 Hz update rate
                 if TARGET_CENTER_PX is not None and FRAME_WIDTH > 0:
@@ -143,7 +172,7 @@ def autonomous_navigation_thread():
                     # Throttle strategy: moderate speed, reduce when turning hard
                     base_throttle = 0.55
                     throttle = base_throttle * (1.0 - min(1.0, abs(steering)))
-                    throttle = max(0.3, min(0.65, throttle))
+                    throttle = max(0.35, min(0.65, throttle))
 
                     # Optional: if depth is available and very close, ease off
                     if TARGET_DEPTH_M is not None and TARGET_DEPTH_M < 1.5:
@@ -151,8 +180,17 @@ def autonomous_navigation_thread():
 
                     # If target info is stale, slow/stop to avoid blind driving
                     now_ts = time.time()
-                    if TARGET_LAST_UPDATE is not None and (now_ts - TARGET_LAST_UPDATE) > 0.6:
-                        throttle = min(throttle, 0.15)
+                    if TARGET_LAST_UPDATE is not None and (now_ts - TARGET_LAST_UPDATE) > 0.8:
+                        # keep some forward motion but cap speed when stale
+                        throttle = max(0.3, min(throttle, 0.35))
+
+                    # Startup ramp: ensure we overcome static friction
+                    try:
+                        elapsed_auto = now_ts - AUTO_START_TIME
+                        if elapsed_auto < 0.8 and car_state.speed < 0.2:
+                            throttle = max(throttle, 0.4)
+                    except Exception:
+                        pass
 
                     # For logging
                     distance = None
@@ -192,10 +230,12 @@ def autonomous_navigation_thread():
                     airsim_client.setCarControls(car_controls)
                 
                 try:
+                    spd = getattr(car_state, 'speed', None)
+                    spd_txt = f", Speed: {spd:.2f} m/s" if spd is not None else ""
                     if distance is not None:
-                        print(f"AUTO Mode - Dist: {distance:.2f}m, Err: {angle_error:.2f}, Steer: {steering:.2f}, Thr: {throttle:.2f}")
+                        print(f"AUTO Mode - Dist: {distance:.2f}m, Err: {angle_error:.2f}, Steer: {steering:.2f}, Thr: {throttle:.2f}{spd_txt}")
                     else:
-                        print(f"AUTO Mode (image) - ErrX: {angle_error:.2f}, Steer: {steering:.2f}, Thr: {throttle:.2f}")
+                        print(f"AUTO Mode (image) - ErrX: {angle_error:.2f}, Steer: {steering:.2f}, Thr: {throttle:.2f}{spd_txt}")
                 except Exception:
                     pass
                 
@@ -216,6 +256,34 @@ def autonomous_navigation_thread():
                     car_controls.brake = 1
                     with airsim_lock:
                         airsim_client.setCarControls(car_controls)
+
+                # Stuck detection & recovery: if we've been slow for a while, kick forward
+                try:
+                    now_ts = time.time()
+                    if (now_ts - LAST_MOVING_TS) > 1.5 and car_state.speed < 0.2:
+                        print("Stuck detected: applying recovery (handbrake off, gear=1, throttle burst)")
+                        with airsim_lock:
+                            kick = airsim.CarControls()
+                            kick.handbrake = False
+                            kick.brake = 0
+                            kick.is_manual_gear = True
+                            kick.manual_gear = 1
+                            kick.throttle = 0.7
+                            kick.steering = steering
+                            airsim_client.setCarControls(kick)
+                        time.sleep(0.25)
+                        with airsim_lock:
+                            resume = airsim.CarControls()
+                            resume.handbrake = False
+                            resume.brake = 0
+                            resume.is_manual_gear = False
+                            resume.throttle = throttle
+                            resume.steering = steering
+                            airsim_client.setCarControls(resume)
+                        # Assume we will start moving now
+                        globals()['LAST_MOVING_TS'] = time.time()
+                except Exception:
+                    pass
                 
             time.sleep(0.1)  # 10 Hz update rate
             
@@ -395,6 +463,21 @@ def select_object():
             from time import time as _t
             AUTO_START_TIME = _t()
             COLLISION_DETECTED = False
+            # Ensure API control and release any handbrake
+            try:
+                with airsim_lock:
+                    airsim_client.enableApiControl(True)
+                    kick = airsim.CarControls()
+                    kick.handbrake = False
+                    kick.brake = 0
+                    kick.is_manual_gear = True
+                    kick.manual_gear = 1
+                    kick.throttle = 0
+                    airsim_client.setCarControls(kick)
+            except Exception:
+                pass
+            # Seed target immediately from current results so AUTO starts moving
+            _ = _seed_target_from_results()
             return jsonify(success=True, message=f"🎯 TRACKING OBJECT ID: {track_id} | AUTO MODE ACTIVE!", track_id=track_id)
 
     # Second pass: allow a margin around boxes and nearest-box snapping
@@ -487,6 +570,21 @@ def select_track():
     global COLLISION_DETECTED
     COLLISION_DETECTED = False
     print(f"\n✓✓✓ OBJECT SELECTED VIA ID! ID: {SELECTED_TRACK_ID}, Switching to AUTO mode ✓✓✓\n")
+    # Ensure API control and release any handbrake
+    try:
+        with airsim_lock:
+            airsim_client.enableApiControl(True)
+            kick = airsim.CarControls()
+            kick.handbrake = False
+            kick.brake = 0
+            kick.is_manual_gear = True
+            kick.manual_gear = 1
+            kick.throttle = 0
+            airsim_client.setCarControls(kick)
+    except Exception:
+        pass
+    # Seed target immediately from current results so AUTO starts moving
+    _ = _seed_target_from_results()
     return jsonify(success=True, message=f"🎯 TRACKING OBJECT ID: {SELECTED_TRACK_ID} | AUTO MODE ACTIVE!", track_id=SELECTED_TRACK_ID)
 
 @app.route('/toggle_control_source', methods=['POST'])

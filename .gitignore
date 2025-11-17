@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+**/myenv/
+venv/
+env/
+ENV/
+.venv
+
+# Flask
+instance/
+.webassets-cache
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (optional - uncomment if you don't want to track uploaded files)
+# static/uploads/*
+# uploads/*
+
+# YOLO model (optional - uncomment if model is large and shouldn't be in repo)
+# *.pt
+
+# Logs
+*.log
