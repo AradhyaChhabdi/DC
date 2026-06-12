@@ -383,7 +383,7 @@
                       // Prefer inside, but also consider nearest center
                       const prefer = inside ? 0 : 1; // inside beats outside
                       if (!best || prefer < best.prefer || (prefer === best.prefer && dist < best.dist)) {
-                          best = { id: det.id, dist };
+                          best = { id: det.id, dist, prefer };
                       }
                   });
 

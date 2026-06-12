@@ -1,0 +1,12 @@
+# Core framework
+flask>=2.3.0
+
+# Computer vision & object detection
+ultralytics>=8.0.0       # YOLOv8 (includes ByteTrack)
+opencv-python>=4.8.0
+
+# Simulation interface
+airsim>=1.8.1
+
+# Numerical computing (pulled in by ultralytics/cv2 anyway)
+numpy>=1.24.0

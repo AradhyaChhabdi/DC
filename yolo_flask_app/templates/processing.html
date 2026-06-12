@@ -1,6 +1,4 @@
-
-<!--
-    <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -49,9 +47,7 @@
     <h1>Object Detection in Progress</h1>
     <p id="instructions">Click on an object to track it. Click the "Reset View" button to see all objects again.</p>
 
-    // This container will hold the video stream
     <div id="video-container">
-        //The video stream from the Flask backend
         <img id="video-stream" src="{{ url_for('video_feed') }}" alt="Video Stream">
     </div>
 
@@ -60,7 +56,7 @@
     </div>
     
     <div id="status">Status: Detecting all objects.</div>
-    <a href="{{ url_for('index') }}">Upload another video</a>
+    <a href="{{ url_for('index') }}">Back to main view</a>
 
     <script>
         const videoStream = document.getElementById('video-stream');
@@ -122,4 +118,3 @@
     </script>
 </body>
 </html>
--->

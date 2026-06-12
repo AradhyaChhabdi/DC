@@ -9,7 +9,16 @@ import time
 import math
 
 app = Flask(__name__)
-app.secret_key = 'your_very_secret_key'
+_secret = os.environ.get('FLASK_SECRET_KEY')
+if not _secret:
+    import warnings
+    warnings.warn(
+        "FLASK_SECRET_KEY environment variable not set. Using an insecure default. "
+        "Set it before running in production.",
+        stacklevel=1
+    )
+    _secret = 'dev-insecure-secret-change-me'
+app.secret_key = _secret
 
 # Load the YOLOv8 model
 model = YOLO('yolov8n.pt')
@@ -336,7 +345,8 @@ def generate_frames():
             FRAME_HEIGHT, FRAME_WIDTH, _ = annotated_frame.shape
 
             if SELECTED_TRACK_ID is not None:
-                annotated_frame = frame.copy()
+                # Start from the YOLO-annotated frame so non-tracked detections remain visible
+                annotated_frame = results[0].plot()
                 if results[0].boxes.id is not None:
                     boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
                     ids = results[0].boxes.id.cpu().numpy().astype(int)
